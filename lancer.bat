@@ -23,7 +23,7 @@ if errorlevel 1 (
 )
 
 REM Ouvre le navigateur apres quelques secondes (le serveur demarre en arriere-plan)
-start "" cmd /c "timeout /t 4 /nobreak >nul & start http://localhost:8502"
+start "" cmd /c "timeout /t 4 /nobreak >nul & start http://localhost:8501"
 
 echo Contratheque demarre. Fermez cette fenetre pour l'arreter.
 python -m streamlit run app.py
