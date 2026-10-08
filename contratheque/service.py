@@ -9,7 +9,7 @@ from typing import Callable
 
 from . import config, db, rangement, suivi
 from .alertes import Alerte, calculer_alertes, fusionner_alertes
-from .calendrier import IcsCalendrier, OutlookCom, ouvrir_fichier
+from .calendrier import IcsCalendrier, OutlookCom, generer_ics, ouvrir_fichier
 from .outils import cle_contrat
 from .schema import ContratJSON
 
@@ -151,3 +151,22 @@ def enregistrer_lignes(conn, racine, contrats, fichier, json_brut, outlook_actif
             ouvrir(cible)
     return [ResultatEnregistrement(i["version"], i["numero_avenant"], ch, sync, av)
             for _, i, ch, av in infos]
+
+
+def alertes_depuis_contrat(contrat: ContratJSON, nom_contrat: str | None = None) -> list[Alerte]:
+    """Alertes d'un contrat pas encore enregistré (aperçu et export agenda immédiat)."""
+    plat = contrat.a_plat()
+    plat["client"] = contrat.client or nom_contrat or "Contrat"
+    plat["site"] = contrat.site or ""
+    plat["activite"] = contrat.activite or ""
+    plat["devise"] = plat.get("devise") or "EUR"
+    plat["cle"] = cle_contrat(plat["client"], plat["site"], plat["activite"])
+    plat["groupe_origine"] = None
+    return calculer_alertes(plat)
+
+
+def ics_depuis_contrat(contrat: ContratJSON, aujourdhui: date | None = None) -> tuple[bytes, list[Alerte]]:
+    """Fichier .ics des alertes à venir d'un contrat, sans l'enregistrer (importable dans Outlook)."""
+    aujourdhui = aujourdhui or date.today()
+    alertes = [a for a in alertes_depuis_contrat(contrat) if a.date >= aujourdhui]
+    return generer_ics(alertes).encode("utf-8"), alertes

@@ -10,6 +10,14 @@ from . import rangement
 from .outils import ajouter_mois, formater_date, formater_montant, lire_date
 
 
+# Thèmes et délais des rappels : « Nom du contrat – Thème (délai) ».
+THEME_FIN = "Fin de contrat"
+THEME_REVISION = "Revalorisation"
+THEME_DENONCIATION = "Dénonciation"
+DELAIS_FIN = (("fin_6m", 6, "dans 6 mois"), ("fin_3m", 3, "dans 3 mois"))
+DELAIS_REVISION = (("revision_3m", 3, "dans 3 mois"), ("revision_1m", 1, "dans 1 mois"))
+
+
 @dataclass(frozen=True)
 class Alerte:
     uid: str
@@ -75,23 +83,22 @@ def calculer_alertes(sit: dict) -> list[Alerte]:
         contexte.append(f"Prochaine révision : {formater_date(revision)}")
     base = "\n".join(contexte)
 
-    def alerte(type_alerte: str, quand: date, intitule: str) -> Alerte:
+    def alerte(type_alerte: str, quand: date, theme: str, delai: str) -> Alerte:
+        intitule = f"{theme} ({delai})"
         return Alerte(uid_alerte(cle, type_alerte), cle, groupe, type_alerte, quand,
-                      f"{intitule} – {lib}", base, sit.get("groupe_origine"), intitule,
+                      f"{lib} – {intitule}", base, sit.get("groupe_origine"), intitule,
                       sit["client"], site_activite, ", ".join(resume))
 
     resultat: list[Alerte] = []
-    if echeance:
-        resultat.append(alerte("fin_6m", ajouter_mois(echeance, -6),
-                               "Fin de contrat dans 6 mois : anticiper le renouvellement"))
-    if revision:
-        resultat.append(alerte("revision_2m", ajouter_mois(revision, -2), "Revalorisation dans 2 mois"))
-        resultat.append(alerte("revision_1m", ajouter_mois(revision, -1), "Revalorisation dans 1 mois"))
+    for type_alerte, mois, delai in DELAIS_FIN:
+        if echeance:
+            resultat.append(alerte(type_alerte, ajouter_mois(echeance, -mois), THEME_FIN, delai))
+    for type_alerte, mois, delai in DELAIS_REVISION:
+        if revision:
+            resultat.append(alerte(type_alerte, ajouter_mois(revision, -mois), THEME_REVISION, delai))
     if limite:
-        resultat.append(alerte("denonciation_1m", ajouter_mois(limite, -1),
-                               "Date limite de dénonciation dans 1 mois"))
-        resultat.append(alerte("denonciation_jour", limite,
-                               "DERNIER JOUR pour dénoncer le contrat"))
+        resultat.append(alerte("denonciation_1m", ajouter_mois(limite, -1), THEME_DENONCIATION, "dans 1 mois"))
+        resultat.append(alerte("denonciation_jour", limite, THEME_DENONCIATION, "dernier jour"))
     return resultat
 
 
@@ -121,7 +128,7 @@ def fusionner_alertes(alertes: list[Alerte]) -> list[Alerte]:
                        "Sites concernés :\n" + "\n".join(lignes))
         sortie.append(replace(
             premier,
-            titre=f"{premier.intitule} – {premier.client} ({len(membres)} sites)",
+            titre=f"{premier.client} ({len(membres)} sites) – {premier.intitule}",
             description=description,
             groupe=f"{rangement.normaliser(premier.client)}_MultiSites_{origine[:6]}",
         ))

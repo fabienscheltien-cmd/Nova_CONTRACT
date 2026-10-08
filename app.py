@@ -9,7 +9,7 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-from contratheque import config, db, extraction, multisite, revision, service, suivi
+from contratheque import conformite, config, db, extraction, lecture, multisite, prefill, revision, service, suivi
 from contratheque.controles import CHAMPS_DATES, chercher_preuve, diagnostiquer_dates
 from contratheque.outils import cle_contrat, formater_date, formater_montant, lire_date
 from contratheque.schema import ACTIVITES, PERIODICITES, TYPES_DOCUMENT, valider
@@ -104,7 +104,7 @@ def bandeau_a_traiter(conn, sits: list[dict], aujourdhui: date) -> None:
 # --------------------------------------------------------------------------- ajout
 
 def reinitialiser() -> None:
-    for cle in ("lot", "lot_i", "fichier_lot"):
+    for cle in ("lot", "lot_i", "fichier_lot", "texte_contrat"):
         st.session_state.pop(cle, None)
     st.session_state["n"] = st.session_state.get("n", 0) + 1
 
@@ -120,14 +120,35 @@ def onglet_ajout(conn, racine: Path, cfg: dict, sits: list[dict], aujourdhui: da
         ecran_validation(conn, racine, cfg, sits, aujourdhui, lot, n)
 
 
+def lancer_lot(resultats: list, fichier, texte_contrat: str | None) -> None:
+    st.session_state["lot"] = resultats
+    st.session_state["lot_i"] = 0
+    st.session_state["fichier_lot"] = fichier
+    st.session_state["texte_contrat"] = texte_contrat
+    st.rerun()
+
+
 def ecran_collage(n: int) -> None:
-    st.subheader("1. Coller le résultat de l'analyse")
-    texte = st.text_area("Coller ici", height=240, key=f"texte_{n}",
+    st.subheader("1. Déposer le contrat ou coller l'analyse")
+    fichier = st.file_uploader(
+        "Glissez-déposez le contrat ici, ou cliquez pour le choisir (PDF, Word .docx ou .txt)",
+        type=["pdf", "docx", "txt"], key=f"fichier_{n}",
+        help="Le texte est lu sur votre ordinateur : rien n'est envoyé sur Internet.")
+    texte = st.text_area("… ou collez ici le résultat de l'analyse (JSON)", height=160, key=f"texte_{n}",
                          placeholder="Collez la réponse de l'analyse (le bloc JSON suffit, le texte autour est ignoré). "
                                      "Plusieurs blocs collés d'un coup sont traités comme un lot.")
-    fichier = st.file_uploader("Fichier du contrat (facultatif) — PDF ou Word",
-                               type=["pdf", "doc", "docx"], key=f"fichier_{n}")
-    if st.button("Analyser", type="primary"):
+    if fichier and not texte.strip():  # dépôt seul : lecture et pré-remplissage immédiats
+        try:
+            contenu = lecture.lire_texte(fichier.name, fichier.getvalue())
+        except lecture.LectureError as exc:
+            st.error(str(exc))
+            return
+        res = prefill.analyser_texte(contenu, fichier.name)
+        if res.donnees is None:
+            st.error("**Pré-remplissage impossible.**\n\n" + "\n".join(f"- {e}" for e in res.erreurs))
+            return
+        lancer_lot([res], (fichier.name, fichier.getvalue()), contenu)
+    if st.button("Analyser le JSON collé", type="primary", disabled=not texte.strip()):
         resultats = extraction.analyser_lot(texte)
         problemes = [(k, r) for k, r in enumerate(resultats, start=1) if r.erreurs or r.donnees is None]
         if problemes:
@@ -135,11 +156,14 @@ def ecran_collage(n: int) -> None:
                 prefixe = f"Bloc {k} : " if len(resultats) > 1 else ""
                 st.error("**Analyse impossible.**\n\n" + "\n".join(f"- {prefixe}{e}" for e in r.erreurs))
             return
-        st.session_state["lot"] = resultats
-        st.session_state["lot_i"] = 0
-        st.session_state["fichier_lot"] = (fichier.name, fichier.getvalue()) if fichier and len(resultats) == 1 else None
+        contenu = None
+        if fichier and len(resultats) == 1:
+            try:
+                contenu = lecture.lire_texte(fichier.name, fichier.getvalue())
+            except lecture.LectureError:
+                contenu = None  # le contrôle de conformité sera simplement indisponible
         st.session_state["fichier_lot_ignore"] = bool(fichier and len(resultats) > 1)
-        st.rerun()
+        lancer_lot(resultats, (fichier.name, fichier.getvalue()) if fichier and len(resultats) == 1 else None, contenu)
 
 
 def ecran_validation(conn, racine, cfg, sits, aujourdhui, lot, n) -> None:
@@ -164,10 +188,63 @@ def ecran_validation(conn, racine, cfg, sits, aujourdhui, lot, n) -> None:
     elif fichier:
         st.caption(f"📎 Fichier joint : {fichier[0]}")
 
+    if len(lot) > 1:
+        st.session_state["texte_contrat"] = None
     if res.donnees.multi_site:
         ecran_scission(conn, racine, cfg, aujourdhui, res, fichier, lot, i, n)
     else:
         formulaire_simple(conn, racine, cfg, sits, aujourdhui, res, fichier, lot, i, n)
+
+
+def nom_du_contrat(c, fichier) -> str:
+    morceaux = [x for x in (c.client, c.site, c.activite) if x]
+    return " – ".join(morceaux) if morceaux else (Path(fichier[0]).stem if fichier else "Contrat")
+
+
+def panneau_agenda(contrats: list, nom: str, aujourdhui: date) -> None:
+    """Aperçu des rappels et export immédiat vers l'agenda (Outlook, Google, Apple : fichier .ics)."""
+    from contratheque.alertes import fusionner_alertes
+    from contratheque.calendrier import generer_ics
+    alertes = [a for c in contrats for a in service.alertes_depuis_contrat(c)]
+    a_venir = fusionner_alertes([a for a in alertes if a.date >= aujourdhui])
+    with st.expander(f"📅 Alertes agenda ({len(a_venir)} à venir)", expanded=True):
+        if not a_venir:
+            st.write("Aucune alerte à venir : renseignez la date d'échéance, de révision ou de dénonciation.")
+            return
+        st.dataframe(pd.DataFrame([{"Date": formater_date(a.date), "Titre de l'événement": a.titre} for a in a_venir]),
+                     hide_index=True, width="stretch")
+        st.download_button("📅 Ajouter ces alertes à mon agenda (.ics)", generer_ics(a_venir).encode("utf-8"),
+                           file_name=f"{nom}.ics".replace("/", "-"), mime="text/calendar", type="primary",
+                           help="Ouvrez le fichier téléchargé : Outlook (ou tout autre agenda) importe les événements avec leur rappel.")
+        st.caption("Chaque événement s'appelle « Nom du contrat – Thème (délai) » et a un rappel la veille à 9 h. "
+                   "Une fois le contrat enregistré, ces mêmes alertes sont mises à jour sans doublon.")
+
+
+def panneau_conformite(texte: str | None, donnees, nom: str) -> None:
+    with st.expander("⚖️ Contrôle de conformité (droit français, indicatif)", expanded=True):
+        if not texte:
+            st.info("Déposez le fichier du contrat (PDF, Word ou .txt) pour obtenir le contrôle clause par clause.")
+        else:
+            constats = conformite.analyser_conformite(texte, donnees)
+            nb_risques = sum(c.niveau == "risque" for c in constats)
+            st.caption(f"Contrôle par règles, articles relus sur Légifrance le {conformite.DATE_VERIFICATION}. "
+                       "**Aucune jurisprudence n'est recherchée par l'application** et ce contrôle ne remplace pas un avis juridique.")
+            if nb_risques:
+                st.error(f"{nb_risques} point(s) à risque repéré(s).")
+            for c in constats:
+                with st.container(border=True):
+                    st.markdown(f"**{conformite.NIVEAUX[c.niveau]} – {c.clause}**")
+                    st.write(c.probleme)
+                    if c.extrait:
+                        st.markdown(f"> {c.extrait}")
+                    st.markdown(f"**Recommandation** : {c.recommandation}")
+                    if c.references:
+                        st.markdown(" · ".join(f"[{lib}]({url})" for lib, url in c.references))
+            st.download_button("Télécharger le rapport (.md)", conformite.rapport_markdown(nom, constats).encode("utf-8"),
+                               file_name=f"conformite_{nom}.md".replace("/", "-"), mime="text/markdown")
+        st.markdown("**Pour la jurisprudence** : collez cette demande dans votre Projet claude.ai (connecteur Légifrance), "
+                    "contrat en pièce jointe.")
+        st.code(conformite.demande_claude(nom), language=None)
 
 
 def passer_au_suivant(i: int, lot: list, messages: list[str]) -> None:
@@ -234,6 +311,8 @@ def formulaire_simple(conn, racine, cfg, sits, aujourdhui, res, fichier, lot, i,
             st.info(f"Un contrat existe déjà pour {d['client']} – {d['site']} – {d['activite']} : "
                     "l'enregistrement ajoutera une nouvelle version, l'ancienne reste dans l'historique.")
 
+    panneau_agenda([res.donnees], nom_du_contrat(res.donnees, fichier), aujourdhui)
+    panneau_conformite(st.session_state.get("texte_contrat"), res.donnees, nom_du_contrat(res.donnees, fichier))
     k = lambda nom: f"v{n}_{i}_{nom}"
     with st.form(f"form_{n}_{i}"):
         st.markdown("##### Qui et quoi")
@@ -403,6 +482,9 @@ def ecran_scission(conn, racine, cfg, aujourdhui, res, fichier, lot, i, n) -> No
         if remarques:
             st.warning(f"**{ct.site} – {ct.activite}** : " + " | ".join(remarques))
 
+    if contrats:
+        panneau_agenda(contrats, nom_du_contrat(res.donnees, fichier), aujourdhui)
+    panneau_conformite(st.session_state.get("texte_contrat"), res.donnees, nom_du_contrat(res.donnees, fichier))
     bloque = bool(erreurs) or len(contrats) < 2
     if st.button(f"Valider et enregistrer les {len(contrats)} lignes", type="primary", disabled=bloque):
         try:

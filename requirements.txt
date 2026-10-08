@@ -1,3 +1,4 @@
 streamlit>=1.50
 pydantic>=2.6
+pypdf>=4.0
 pywin32; sys_platform == "win32"

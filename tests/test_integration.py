@@ -39,7 +39,7 @@ def test_enregistrement_complet_et_revalidation_sans_doublon(conn, tmp_path):
     assert res.version == 1
     assert res.chemin_fichier == racine / "Acme" / "Acme_Paris_Accueil" / "Acme_Paris_Accueil_Contrat.pdf"
     assert res.chemin_fichier.read_bytes() == b"%PDF"
-    assert db.nombre_alertes(conn) == 5  # fin, 2 révisions, 2 dénonciations (calculée)
+    assert db.nombre_alertes(conn) == 6  # 2 fin, 2 révisions, 2 dénonciations (calculée)
     assert (racine / "_Calendrier" / "Acme_Paris_Accueil.ics").exists()
 
     # nouvelle validation : version 2, fichier non écrasé, alertes mises à jour sans doublon
@@ -48,7 +48,7 @@ def test_enregistrement_complet_et_revalidation_sans_doublon(conn, tmp_path):
                                        aujourdhui=AUJ, ouvrir=None)
     assert res2.version == 2 and res2.chemin_fichier.name.endswith("_v2.pdf")
     assert res.chemin_fichier.read_bytes() == b"%PDF"
-    assert db.nombre_alertes(conn) == 5
+    assert db.nombre_alertes(conn) == 6
     assert res2.sync.bilan.nouvelles == 0 and res2.sync.bilan.modifiees >= 1
     ics = (racine / "_Calendrier" / "toutes_alertes.ics").read_bytes().decode("utf-8")
     assert ics.count("BEGIN:VEVENT") == 5
@@ -144,8 +144,8 @@ def test_enregistrement_multisite(conn, tmp_path):
     assert len({l["groupe_origine"] for l in lignes}) == 1 and lignes[0]["groupe_origine"]
     assert {l["fichier_origine"] for l in lignes} == {"contrat.pdf"}
     assert {l["montant_ht"] for l in lignes} == {1000, 800, None}
-    # alertes par enregistrement : 3 × 5, agenda regroupé : 5 événements
-    assert db.nombre_alertes(conn) == 15
+    # alertes par enregistrement : 3 × 6 ; agenda regroupé et à venir : 5 événements (révision −3 mois déjà passée)
+    assert db.nombre_alertes(conn) == 18
     ics = (racine / "_Calendrier" / "toutes_alertes.ics").read_bytes().decode("utf-8")
     assert ics.count("BEGIN:VEVENT") == 5
     assert "3 sites" in ics.replace("\r\n ", "")
@@ -154,7 +154,7 @@ def test_enregistrement_multisite(conn, tmp_path):
     assert len(list((racine / "_Calendrier").glob("Acme_MultiSites_*.ics"))) == 1
     # revalider ne duplique rien
     service.mettre_a_jour(conn, racine, aujourdhui=AUJ)
-    assert db.nombre_alertes(conn) == 15
+    assert db.nombre_alertes(conn) == 18
     assert (racine / "_Calendrier" / "toutes_alertes.ics").read_bytes().decode("utf-8").count("BEGIN:VEVENT") == 5
 
 

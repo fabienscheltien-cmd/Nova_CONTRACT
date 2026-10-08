@@ -63,7 +63,7 @@ def test_ics_depuis_alertes_reelles():
          "montant_ht": 1000.0, "periodicite": "mensuel", "devise": "EUR", "date_echeance": "2027-03-31",
          "date_revision": "2027-03-31", "date_limite_denonciation": None, "preavis_denonciation_jours": 90}
     ics = generer_ics(calculer_alertes(s) + calculer_alertes(s), MAINTENANT)
-    assert len(uids(ics)) == len(set(uids(ics))) == 5
+    assert len(uids(ics)) == len(set(uids(ics))) == 6
 
 
 def test_outlook_absent_sans_erreur_et_graph_non_implemente():

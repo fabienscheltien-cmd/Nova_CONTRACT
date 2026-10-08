@@ -30,16 +30,24 @@ def test_alertes_echeance_revision_denonciation():
     a = par_type(calculer_alertes(sit(date_echeance="2027-03-31", date_revision="2027-03-31",
                                       date_limite_denonciation="2026-12-31")))
     assert a == {
-        "fin_6m": date(2026, 9, 30),
-        "revision_2m": date(2027, 1, 31), "revision_1m": date(2027, 2, 28),
+        "fin_6m": date(2026, 9, 30), "fin_3m": date(2026, 12, 31),
+        "revision_3m": date(2026, 12, 31), "revision_1m": date(2027, 2, 28),
         "denonciation_1m": date(2026, 11, 30), "denonciation_jour": date(2026, 12, 31),
     }
+
+
+def test_titre_nom_du_contrat_et_theme():
+    titres = {a.type: a.titre for a in calculer_alertes(sit(date_echeance="2027-03-31", date_revision="2027-03-31"))}
+    assert titres["revision_3m"] == "Acme – Paris – Accueil – Revalorisation (dans 3 mois)"
+    assert titres["fin_6m"] == "Acme – Paris – Accueil – Fin de contrat (dans 6 mois)"
+    assert titres["fin_3m"].endswith("Fin de contrat (dans 3 mois)")
 
 
 def test_alertes_annee_bissextile():
     a = par_type(calculer_alertes(sit(date_echeance="2028-08-31", date_revision="2028-04-30")))
     assert a["fin_6m"] == date(2028, 2, 29)
-    assert a["revision_2m"] == date(2028, 2, 29) and a["revision_1m"] == date(2028, 3, 30)
+    assert a["fin_3m"] == date(2028, 5, 31)
+    assert a["revision_3m"] == date(2028, 1, 30) and a["revision_1m"] == date(2028, 3, 30)
 
 
 def test_date_limite_calculee_si_absente():
@@ -72,19 +80,20 @@ def test_regroupement_agenda_multi_site():
     for site, act in sites:
         alertes += calculer_alertes(sit(cle=cle_contrat("Acme", site, act), site=site, activite=act,
                                         date_echeance="2027-03-31", groupe_origine="abc123def456"))
-    assert len(alertes) == 3
+    assert len(alertes) == 6  # fin_6m et fin_3m pour chacun des 3 enregistrements
     agenda = fusionner_alertes(alertes)
-    assert len(agenda) == 1
-    assert "3 sites" in agenda[0].titre
+    assert len(agenda) == 2
+    fin6 = next(a for a in agenda if a.type == "fin_6m")
+    assert fin6.titre == "Acme (3 sites) – Fin de contrat (dans 6 mois)"
     for site, _ in sites:
-        assert site in agenda[0].description
-    assert agenda[0].uid == min(a.uid for a in alertes)  # stable
+        assert site in fin6.description
+    assert fin6.uid == min(a.uid for a in alertes if a.type == "fin_6m")  # stable
 
 
 def test_pas_de_regroupement_si_dates_differentes_ou_sans_origine():
     a = calculer_alertes(sit(cle="a|b|c", site="Paris", date_echeance="2027-03-31", groupe_origine="o1"))
     b = calculer_alertes(sit(cle="d|e|f", site="Lyon", date_echeance="2027-04-30", groupe_origine="o1"))
-    assert len(fusionner_alertes(a + b)) == 2
+    assert len(fusionner_alertes(a + b)) == 4
     c = calculer_alertes(sit(cle="g|h|i", date_echeance="2027-03-31"))
     d = calculer_alertes(sit(cle="j|k|l", date_echeance="2027-03-31"))
-    assert len(fusionner_alertes(c + d)) == 2
+    assert len(fusionner_alertes(c + d)) == 4
